@@ -1,0 +1,257 @@
+---
+title: "homework3"
+output: html_document
+date: "2026-10-24"
+---
+数据预处理：导入地理数据，确定坐标系
+```{r}
+library(sf) 
+library(here)
+st_layers("data/wk3/gadm41_CHN.gpkg")
+```
+```{r}
+library(sf)
+library(tidyverse)
+Chnoutline <- st_read("data/wk3/gadm41_CHN.gpkg", 
+                      layer='ADM_ADM_0')
+```
+```{r}
+library(sf)
+st_crs(Chnoutline)$proj4string
+```
+
+栅格数据
+```{r}
+library(terra)
+ssp126<-terra::rast("data/wk3/wc2.1_2.5m_tmax_MIROC6_ssp126_2081-2100.tif")
+ssp585<-terra::rast("data/wk3/wc2.1_2.5m_tmax_MIROC6_ssp585_2081-2100.tif")
+# have a look at the raster layer jan
+ssp126
+ssp585
+```
+
+```{r}
+plot(ssp126)
+plot(ssp585)
+```
+
+```{r}
+# look in our folder, find the files that end with .tif and 
+library(fs)
+dir_info("data/wk3/") 
+```
+```{r}
+library(tidyverse)
+listfiles<-dir_info("data/wk3/") %>%
+  filter(str_detect(path, ".tif")) %>%
+  dplyr::select(path)%>%
+  pull()
+
+#have a look at the file names 
+listfiles
+```
+```{r}
+worldclimtemp <- listfiles %>%
+  terra::rast()
+  
+#have a look at the raster stack
+worldclimtemp
+```
+```{r}
+names(worldclimtemp) <- c(
+  paste0("ssp126_", month.abb),
+  paste0("ssp585_", month.abb)
+)
+```
+
+```{r}
+names(Chnoutline)
+```
+别运行，，，
+```{r}
+ChnoutSIMPLE <- Chnoutline %>%
+  st_simplify(., dTolerance = 1000) %>%
+  st_geometry()%>%
+  plot()
+#plot(Chnoutline$geom)
+```
+```{r}
+Chntemp <- Chnoutline %>%
+  # now crop our temp data to the extent
+  terra::crop(worldclimtemp,.)
+
+# plot the output
+plot(Chntemp)
+```
+```{r}
+exactChn<-terra::mask(Chntemp, Chnoutline)
+```
+```{r}
+names(exactChn)
+```
+```{r}
+library(tidyterra)
+ggplot() +
+  # function from tidyterra
+  geom_spatraster(
+    # the raster 
+    data = exactChn,
+    # the layer within the raster
+    aes(fill = ssp126_Aug)
+  )
+```
+宽表转长表
+```{r}
+exactChndf <- exactChn %>%
+  as.data.frame()
+```
+```{r}
+names(exactChndf)
+ncol(exactChndf)
+head(exactChndf)
+```
+
+```{r}
+squishdata <- exactChndf %>%
+  pivot_longer(
+    cols = 1:24,
+    names_to = "Layer",
+    values_to = "Temp"
+  )
+head(squishdata)
+```
+
+```{r}
+data_complete_cases <- squishdata %>%
+  drop_na() %>%
+  mutate(
+    Layer = factor(
+      Layer,
+      levels = c(
+        paste0("ssp126_", month.abb),
+        paste0("ssp585_", month.abb)
+      )
+    )
+  )
+
+ggplot(data_complete_cases, aes(x = Temp)) +
+  geom_histogram(color = "black", binwidth = 5) +
+  labs(
+    title = "Monthly Maximum Temperature in China",
+    x = "Temperature",
+    y = "Frequency"
+  ) +
+  facet_grid(Layer ~ .) +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+```{r}
+# mean per month
+meanofall <- squishdata %>%
+  group_by(Layer) %>%
+  summarise(mean = mean(Temp, na.rm=TRUE))
+
+# print the top 1
+head(meanofall, n=1)
+```
+```{r}
+# standard deviation per month
+sdofall <- squishdata %>%
+  group_by(Layer) %>%
+  summarize(sd = sd(Temp, na.rm=TRUE))
+
+# maximum per month
+maxofall <- squishdata %>%
+  group_by(Layer) %>%
+  summarize(max = max(Temp, na.rm=TRUE))
+
+# minimum per month
+minofall <- squishdata %>%
+  group_by(Layer) %>%
+  summarize(min = min(Temp, na.rm=TRUE))
+
+# Interquartlie range per month
+IQRofall <- squishdata %>%
+  group_by(Layer) %>%
+  summarize(IQR = IQR(Temp, na.rm=TRUE))
+
+# perhaps you want to store multiple outputs in one list..
+lotsofstats <- squishdata %>%
+  group_by(Layer) %>%
+  summarize(IQR = IQR(Temp, na.rm=TRUE), 
+            max=max(Temp, na.rm=T))
+
+# or you want to know the mean (or some other stat) 
+#for the whole year as opposed to each month...
+
+meanwholeyear=squishdata %>%
+  summarize(meanyear = mean(Temp, na.rm=TRUE))
+```
+
+
+```{r}
+library(sf)
+library(tidyverse)
+library(terra)
+
+cities <- st_read("data/wk3/World_Cities.geojson")
+```
+```{r}
+st_geometry_type(cities)
+```
+```{r}
+names(cities)
+```
+
+```{r}
+china_cities <- cities %>%
+  filter(CNTRY_NAME == "China")
+View(china_cities)
+```
+提取每个城市气温
+```{r}
+city_temp <- terra::extract(exactChn, china_cities)
+view(city_temp)
+```
+表中中增加城市名
+```{r}
+city_temp_wide <- bind_cols(
+  tibble(CITY_NAME = china_cities$CITY_NAME),
+  as_tibble(city_temp) %>%
+    select(-ID)
+)
+```
+```{r}
+city_comparison <- city_temp_wide %>%
+  transmute(
+    CITY_NAME,
+    Jan = ssp585_Jan - ssp126_Jan,
+    Feb = ssp585_Feb - ssp126_Feb,
+    Mar = ssp585_Mar - ssp126_Mar,
+    Apr = ssp585_Apr - ssp126_Apr,
+    May = ssp585_May - ssp126_May,
+    Jun = ssp585_Jun - ssp126_Jun,
+    Jul = ssp585_Jul - ssp126_Jul,
+    Aug = ssp585_Aug - ssp126_Aug,
+    Sep = ssp585_Sep - ssp126_Sep,
+    Oct = ssp585_Oct - ssp126_Oct,
+    Nov = ssp585_Nov - ssp126_Nov,
+    Dec = ssp585_Dec - ssp126_Dec
+  )
+```
+```{r}
+monthly_summary <- city_comparison %>%
+  summarise(
+    across(
+      Jan:Dec,
+      list(
+        mean = ~ mean(.x, na.rm = TRUE),
+        median = ~ median(.x, na.rm = TRUE),
+        sd = ~ sd(.x, na.rm = TRUE),
+        min = ~ min(.x, na.rm = TRUE),
+        max = ~ max(.x, na.rm = TRUE)
+      )
+    )
+  )
+```
+
+
