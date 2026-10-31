@@ -1,0 +1,87 @@
+---
+title: "practice1"
+output: html_document
+date: "2026-10-08"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r}
+
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+```{r}
+library(tidyverse)
+mycsv <- read_csv("data/wk1/fly_tipping_borough_edit.csv")  
+```
+```{r}
+library(sf)
+# my data is within a data folder.
+shape <- st_read("data/wk1/statistical-gis-boundaries-london/statistical-gis-boundaries-london/ESRI/London_Borough_Excluding_MHW.shp")
+```
+```{r}
+summary(shape)
+```
+```{r}
+plot(shape)
+```
+```{r}
+library(sf)
+shape %>% 
+  st_geometry() %>%
+  plot()
+```
+```{r}
+shape2 <- shape%>%
+  merge(.,
+        mycsv,
+        by.x="GSS_CODE", 
+        by.y="Row Labels")
+```
+
+```{r}
+shape%>%
+  head(., n=10)
+```
+```{r}
+library(tmap)
+```
+```{r}
+tmap_mode("plot")
+# change the fill to your column name if different
+shape2 %>%
+  qtm(.,fill = "2011/12/1")
+```
+```{r}
+shape%>% st_write(.,
+  "data/wk1/flytipping.gpkg",
+  layer = "london_boroughs_fly_tipping",
+  delete_dsn = TRUE
+)
+```
+```{r}
+library(RSQLite)
+
+con <- dbConnect(RSQLite::SQLite(),dbname="data/wk1/flytipping.gpkg")
+```
+```{r}
+con %>%
+  dbListTables()
+```
+```{r}
+con %>%
+  dbWriteTable(.,
+               "original_csv",
+               mycsv,
+               overwrite=TRUE)
+
+con %>% 
+  dbDisconnect()
+```
+
+
