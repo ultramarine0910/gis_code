@@ -1,0 +1,347 @@
+---
+title: "practice5"
+output: html_document
+date: "2026-11-05"
+---
+```{r}
+library(sf)
+library(tidyverse)
+
+# OSM data
+
+OSM <- st_read("../data/wk5/greater-london-261104-free.shp/gis_osm_pois_free_1.shp")%>%
+  st_transform(., 27700) %>%
+  #select hotels only
+  filter(fclass == 'hotel')
+```
+```{r}
+# Airbnb data
+Airbnb <- read_csv("../data/wk5/listings.csv") %>%
+  # longitude is considered x value here, latitude is y
+  st_as_sf(., coords = c("longitude", "latitude"), #转换为空间数据，默认会把原来的两个坐标列转换为一个 geometry 列，并删除原来的经纬度列。
+                   crs = 4326) %>%
+    st_transform(., 27700)%>%
+    #select entire places that are available all year
+    filter(room_type == 'Entire home/apt' & availability_365 =='365')
+
+
+#London Borough data is already in 277000
+Londonborough <- st_read("../data/wk1/statistical-gis-boundaries-london/statistical-gis-boundaries-london/ESRI/London_Borough_Excluding_MHW.shp")%>%
+  st_transform(., 27700)
+```
+```{r}
+# load world cities
+Worldcities <- st_read("../data/wk5/World_Cities/World_Cities.shp") %>%
+  st_transform(., 27700)
+```
+```{r}
+# filter based on key cities
+Worldcities2 <- Worldcities %>%
+  filter(CNTRY_NAME=='United Kingdom'&
+           Worldcities$CITY_NAME=='Birmingham'|
+           Worldcities$CITY_NAME=='London'|
+           Worldcities$CITY_NAME=='Edinburgh')
+
+# load UK outline
+UK_outline <- st_read("../data/wk5/gadm41_GBR_shp/gadm41_GBR_0.shp")%>%
+  st_transform(., 27700)
+```
+```{r}
+Hotels <-  st_join(Londonborough, OSM)
+
+Airbnbs <-  st_join(Londonborough, Airbnb)
+
+head(Hotels)
+```
+
+```{r}
+Hotels_sum <- Hotels %>%
+  # we need to list the columns we want to keep in the summarise
+  group_by(., GSS_CODE, NAME)%>%
+  # for each group count the number of rows and store in a column called accomodation count.
+  summarise(`Accomodation count` = n())
+
+Airbnb_sum <- Airbnbs %>%
+  group_by(., GSS_CODE, NAME)%>%
+  summarise(`Accomodation count` = n())
+```
+```{r}
+# the st_join data = 0 Hotels
+Hotels %>%
+  filter(NAME=="Barking and Dagenham")
+```
+```{r}
+# the group by and summarise data = 1 Hotel!
+Hotels_sum %>%
+  filter(NAME=="Barking and Dagenham")
+```
+```{r}
+Hotels_example <-st_contains(Londonborough, OSM)
+
+Hotels_example
+```
+```{r}
+Accomodation_contained <- Londonborough%>%
+  mutate(hotels_n = lengths(st_contains(., OSM)))%>%
+  mutate(airbnbs_n = lengths(st_contains(., Airbnbs)))
+```
+```{r}
+# the group by and summarise data = 1 Hotel!
+Accomodation_contained %>%
+  filter(NAME=="Barking and Dagenham")
+```
+```{r}
+Hotels2 <-  st_join(OSM, Londonborough)
+London_data <-  st_join(London_borough_data1, London_borough_data2, join=st_equals)
+```
+```{r}
+remotes::install_github("r-tmap/tmap")
+```
+``` 
+library(tmap)
+
+# change to "view" for an interactive map
+tmap_mode("plot")
+```
+```{r}
+# set the shape
+tm1 <- tm_shape(Accomodation_contained) + 
+  # set the map layer
+  # try changing this to tm_symbols()
+  tm_polygons("hotels_n",
+              col = "black", lwd=0.5, lty="dashed",)
+  #lwd=0.5设置边界线宽为 0.5，lty = "dashed"设置边界为虚线）
+
+# plot the map
+tm1
+```
+```{r}
+tm_no_map_layer <- tm_shape(Accomodation_contained) + 
+  # there is no tm_polygons() if we just want the map with no spatial data
+  tm_borders(col = "darkblue")
+
+tm_no_map_layer
+```
+```{r}
+# plot each map
+tm1 <- tm_shape(Accomodation_contained) + 
+  tm_polygons(fill ="hotels_n",
+              col = "black", 
+              lwd =0.5,
+              lty="dashed",
+              fill.chart = tm_chart_violin(),
+              # above this was the same as before
+              fill.scale = tm_scale_intervals( #设置数值分级
+                values="brewer.bu_pu",# 蓝紫色系
+                n=5,   # 5 个等级
+                style="jenks"))# 自然断点法
+
+tm1
+```
+```{r}
+library(colorblindcheck)
+cols4all::c4a_gui()# 打开交互式配色选择器
+# cols4all：用于选择和评估地图配色方案
+# c4a_gui()：打开交互式配色工具（GUI）
+# 可以比较不同配色，并检查颜色是否适合色觉障碍人群
+# Sequential（顺序型）：适用于酒店数量等连续数值
+# Diverging（发散型）：适用于高于或低于平均值的数据
+# Qualitative（定性型）：适用于不同类别的数据
+```
+```{r}
+stats <- Accomodation_contained %>%
+  st_drop_geometry() %>% # 删除空间几何列，转为普通数据框
+  dplyr::select(hotels_n, airbnbs_n) %>%  # 只保留酒店和Airbnb数量
+  summarise(across(everything(), list(
+    min = min,
+    max = max,
+    mean = mean,
+    median = median,
+    sd = sd
+  )))
+```
+
+```{r}
+library(classInt)
+
+# Get Jenks breaks for 5 classes
+breaks <- Accomodation_contained%>%
+  st_drop_geometry()%>% 
+  #need a numeric vector not a dataframe or tibble
+  pull(airbnbs_n) %>%   # 提取 Airbnb 数量这一列          
+  classIntervals(., n = 5, style = "jenks")
+  
+breaks$brks  # 查看计算出的分界点
+```
+```{r}
+tm1 <- tm_shape(Accomodation_contained) +
+    tm_polygons(
+      fill = c("hotels_n", "airbnbs_n"),
+      fill.scale = tm_scale_intervals(values = "brewer.blues",
+                                      # 使用蓝色渐变配色
+                                      breaks=breaks$brks),
+      # set the legend
+      fill.legend = tm_legend(title="Accomodation count",
+                              title.size=0.85,
+                              size=0.8,
+                              # plot outside of the main map
+                              #explained below
+                              position=tm_pos_out("right",    #把图例放在地图绘图区外侧
+                                                  "center",
+                                                  pos.v = "center")),
+      # all facets share the same legend
+      fill.free = FALSE)+  # 两张地图共享颜色分级标准
+  # make 2 rows for the facets
+  tm_facets(nrow=2)# 两张地图上下排列
+
+tm1
+```
+```{r}
+# change headings or remove
+
+tm2 <- tm1+
+  tm_layout(panel.labels=c("Hotels", "Airbnb"),#给两张分面地图分别添加标题
+            panel.show = TRUE #显示分面标题区域。
+            #panel.label.bg.color = "transparent",
+            )+
+  
+  tm_compass(type= "arrow",
+            size=1.8, 
+            position = tm_pos_out("right", 
+                                  "center",
+                                  pos.h= -0.05,# 调整水平位置
+                                  pos.v =0.9))+# 调整垂直位置
+  tm_scalebar(text.size = 0.7,
+              width=10,
+              breaks=c(0,10,20),# 比例尺刻度
+              position = tm_pos_out("right",
+                                    "center", 
+                                    pos.h=0.075,
+                                    pos.v =0.9))+
+  # we could use tm_credits to place sub-titles like (A) or (B)
+  # on the map.
+  tm_credits("(c) OpenStreetMap contrbutors and Air b n b",
+             size=0.6,
+             position = tm_pos_out("center",
+                                   "bottom",
+                                   pos.v = 1.5,
+                                   pos.h=-0.02))
+
+tm2
+```
+```{r}
+# 尝试使用 Mac 原生 Quartz 设备导出 PNG
+tmap_save(
+  tm2,
+  "GIS-practicals/data/wk5/1_facet.png",
+  device = ragg::agg_png,
+  width = 8,
+  height = 6,
+  units = "in",
+  dpi = 300
+)
+```
+```{r}
+qtm(UK_outline)
+```
+```{r}
+newbb <- c(xmin=-296000, ymin=5408, xmax=655696, ymax=1000000)
+  
+UK_outlinecrop <- UK_outline$geometry %>%
+  st_crop(., newbb)
+```
+```{r}
+tm3 <- tm_shape(UK_outlinecrop)+  #选择图层数据
+  tm_polygons(col="darkslategray1")+ #绘制多边形
+    tm_layout(frame=FALSE)+ #隐藏地图外围的边框
+  tm_shape(Worldcities2) +
+    #adds the city points
+    tm_symbols(shape=20,
+               fill = "orange",
+               #outline colour
+               col="black",
+               size=0.8)+
+        #add the city labels, x and y move the label around the point
+    tm_text("CITY_NAME", xmod=-1, ymod=-0.5) #绘制文字标签
+
+tm3
+```
+```{r}
+# st_bbox gives the bounding x and y coordinates 
+Londonbb <- st_bbox(Accomodation_contained, #提取空间范围
+                    crs = st_crs(Accomodation_contained))%>% #保留坐标系信息
+# st_as_sfc coverts the coordinates to an sf object
+  st_as_sfc() #把坐标范围转换成空间几何
+
+tm4 <- tm3 +
+  tm_shape(Londonbb)+ 
+  tm_borders(col = "grey40", lwd = 3)+ #只绘制矩形的边界，不填充内部 # 边界线宽
+    tm_layout(frame=FALSE,
+            bg.color = "transparent") ## 透明背景
+```
+```{r}
+inset <- tmap_grob(tm4, asp=1.1)# 将英国位置图 tm4 转换为可嵌入的 grob 图形对象
+
+final_map<- tm2+
+  tm_inset(inset,# 要插入的小地图
+             position = tm_pos_out("right", "center")) # 放在主地图右侧外部
+tmap_save(final_map, "prac5_data/2_facet.png", width = 8, height = 6, units="in", dpi = 300)
+```
+```{r}
+library(ggplot2)
+
+accom_long <- Accomodation_contained %>%
+  # drop geometry for plotting
+  st_drop_geometry() %>%  # 删除空间几何列
+  pivot_longer(
+    cols = c(hotels_n, airbnbs_n),
+    names_to = "accom_type",
+    values_to = "count"
+  )
+```
+```{r}
+violin <- accom_long %>%
+  ggplot(aes(x = accom_type, 
+             # number
+             y = count, 
+             # hotels or airbnb 
+             fill = accom_type)) +
+  geom_violin(trim = FALSE, #不将核密度估计的小提琴形状截断在实际最小值和最大值处
+              color = "grey30", 
+              alpha = 0.8) +
+  scale_fill_brewer(palette = "Pastel1") +
+  labs( #设置图表文字
+    title = "",
+    x = "",
+    y = "",
+    fill = "black"
+  ) +
+  # change the labels from the column names to..
+scale_x_discrete(labels = c("hotels_n" = "Hotels", #修改 X 轴的类别名称
+                            "airbnbs_n" = "Airbnbs"))+
+  theme_minimal(base_size = 13)+
+  theme(
+    # no legend
+    legend.position = "none", # 隐藏图例
+    # all text to black
+    text = element_text(color = "black"),         # set all text to black
+    axis.text = element_text(color = "black"),    # axis tick labels
+    axis.title = element_text(color = "black"),   # axis titles (if used)
+    plot.title = element_text(color = "black")    # title (if used)
+  )
+```
+```{r}
+library(grid)
+
+# Open PNG device
+png("../data/wk5/3_facet.png", width = 8, height = 6, units="in", res = 300)
+
+tm2
+print(tm4, vp = viewport(x=0.68, y= 0.25, width = 0.3, height = 0.35))
+print(violin, vp = viewport(x=0.67, y= 0.83, width = 0.25, height = 0.35))
+
+
+# Close device
+dev.off()
+```
+
